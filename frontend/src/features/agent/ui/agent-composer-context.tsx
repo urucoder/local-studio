@@ -2,13 +2,13 @@
 
 import {
   AtSign,
-  Boxes,
   CircleDot,
   Download,
   FileText,
   Gauge,
   GitFork,
   Globe,
+  Plug,
   Slash,
   Sparkles,
   Target,
@@ -204,7 +204,7 @@ function MentionRowItem({
       </span>
       {source ? (
         <span
-          className="hidden truncate font-mono text-[length:var(--fs-2xs)] uppercase tracking-wide text-(--dim) sm:inline"
+          className="hidden truncate font-mono text-[length:var(--fs-sm)] text-(--dim) sm:inline"
           title={source}
         >
           {source}
@@ -232,7 +232,7 @@ const BUILTIN_COMMAND_ICONS: Record<string, typeof Slash> = {
   compact: CircleDot,
   status: Gauge,
   browser: Globe,
-  plugins: Boxes,
+  connectors: Plug,
   terminal: TerminalSquare,
   fork: GitFork,
   export: Download,

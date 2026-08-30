@@ -18,29 +18,28 @@ import {
   applyStoredUiControls,
   applyThemeToDocument,
 } from "@/lib/theme-runtime";
+import type { PreviewHeight } from "@/ui/preview-scroll";
+import type {
+  ToolKind,
+  ToolPreviewHeightOverrides,
+} from "@/features/agent/ui/timeline/tool-metadata";
 
 // --- App slice ---
 
-export interface SidebarState {
-  collapsed: boolean;
-  mobileOpen: boolean;
-}
-
 export interface AppSlice {
-  sidebar: SidebarState;
-  setSidebarCollapsed: (collapsed: boolean) => void;
-  toggleSidebarCollapsed: () => void;
-  setSidebarMobileOpen: (open: boolean) => void;
-  toggleSidebarMobileOpen: () => void;
   sidebarWidth: number;
   setSidebarWidth: (width: number) => void;
   fileViewerFontSize: number;
   setFileViewerFontSize: (size: number) => void;
+  toolPreviewHeight: PreviewHeight;
+  setToolPreviewHeight: (height: PreviewHeight) => void;
+  toolPreviewHeightOverrides: ToolPreviewHeightOverrides;
+  setToolPreviewHeightOverride: (kind: ToolKind, height: PreviewHeight | undefined) => void;
   lastOpenFileByProject: Record<string, string>;
   setLastOpenFileByProject: (cwd: string, rel: string) => void;
 }
 
-export const DEFAULT_SIDEBAR_WIDTH = 224;
+export const DEFAULT_SIDEBAR_WIDTH = 275;
 
 const LEGACY_DEFAULT_SIDEBAR_WIDTHS = new Set([204, 220, 224, 240, 260, 275]);
 
@@ -50,25 +49,20 @@ function restoredSidebarWidth(value: unknown, fallback: number): number {
 }
 
 const createAppSlice: StateCreator<AppSlice, [], [], AppSlice> = (set) => ({
-  sidebar: { collapsed: false, mobileOpen: false },
-  setSidebarCollapsed: (collapsed) =>
-    set((state) => {
-      if (state.sidebar.collapsed === collapsed) return state;
-      return { sidebar: { ...state.sidebar, collapsed } };
-    }),
-  toggleSidebarCollapsed: () =>
-    set((state) => ({ sidebar: { ...state.sidebar, collapsed: !state.sidebar.collapsed } })),
-  setSidebarMobileOpen: (mobileOpen) =>
-    set((state) => {
-      if (state.sidebar.mobileOpen === mobileOpen) return state;
-      return { sidebar: { ...state.sidebar, mobileOpen } };
-    }),
-  toggleSidebarMobileOpen: () =>
-    set((state) => ({ sidebar: { ...state.sidebar, mobileOpen: !state.sidebar.mobileOpen } })),
   sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
   setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
   fileViewerFontSize: 12,
   setFileViewerFontSize: (fileViewerFontSize) => set({ fileViewerFontSize }),
+  toolPreviewHeight: "md",
+  setToolPreviewHeight: (toolPreviewHeight) => set({ toolPreviewHeight }),
+  toolPreviewHeightOverrides: {},
+  setToolPreviewHeightOverride: (kind, height) =>
+    set((state) => {
+      const toolPreviewHeightOverrides = { ...state.toolPreviewHeightOverrides };
+      if (height) toolPreviewHeightOverrides[kind] = height;
+      else delete toolPreviewHeightOverrides[kind];
+      return { toolPreviewHeightOverrides };
+    }),
   lastOpenFileByProject: {},
   setLastOpenFileByProject: (cwd, rel) =>
     set((state) => ({
@@ -160,9 +154,10 @@ export const useAppStore = create<AppStore>()(
         fontFamilyId: state.fontFamilyId,
         fontSizeId: state.fontSizeId,
         desktopSidebarPinnedOpen: state.desktopSidebarPinnedOpen,
-        sidebarCollapsed: state.sidebar.collapsed,
         sidebarWidth: state.sidebarWidth,
         fileViewerFontSize: state.fileViewerFontSize,
+        toolPreviewHeight: state.toolPreviewHeight,
+        toolPreviewHeightOverrides: state.toolPreviewHeightOverrides,
         lastOpenFileByProject: state.lastOpenFileByProject,
       }),
       merge: (persisted, current) => {
@@ -172,10 +167,6 @@ export const useAppStore = create<AppStore>()(
           ...current,
           ...persistedStore,
           sidebarWidth: restoredSidebarWidth(persistedRecord.sidebarWidth, current.sidebarWidth),
-          sidebar: {
-            ...current.sidebar,
-            collapsed: persistedRecord.sidebarCollapsed === true,
-          },
         };
       },
       onRehydrateStorage: () => (state) => {
@@ -200,28 +191,4 @@ if (typeof window !== "undefined") {
       useAppStore.subscribe(() => scheduleDurableUiPreferencesSave());
     }
   })();
-}
-
-let appStoreListenersInitialized = false;
-
-export function initAppStoreListeners() {
-  if (appStoreListenersInitialized || typeof window === "undefined") return;
-  appStoreListenersInitialized = true;
-
-  const onResize = () => {
-    if (window.innerWidth < 768 && !useAppStore.getState().sidebar.collapsed) {
-      useAppStore.getState().setSidebarCollapsed(true);
-    }
-  };
-  window.addEventListener("resize", onResize);
-  onResize();
-
-  window.addEventListener("vllm:toggle-sidebar", ((event: CustomEvent<{ open?: boolean }>) => {
-    const requested = event?.detail?.open;
-    if (typeof requested === "boolean") {
-      useAppStore.getState().setSidebarMobileOpen(requested);
-    } else {
-      useAppStore.getState().toggleSidebarMobileOpen();
-    }
-  }) as EventListener);
 }

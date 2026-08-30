@@ -9,8 +9,7 @@ import type { RecipeEditor } from "@/features/recipes/recipe-editor";
 const BACKEND_ITEMS: SegmentedItem<Backend>[] = [
   { id: "vllm", label: "vLLM" },
   { id: "sglang", label: "SGLang" },
-  { id: "llamacpp", label: "llama.cpp" },
-  { id: "mlx", label: "MLX" },
+  { id: "exllamav3", label: "exllamav3" },
 ];
 
 export function RecipeModalSummary({
@@ -50,7 +49,7 @@ export function RecipeModalSummary({
           </div>
         </div>
         <div className="flex flex-col items-end gap-1">
-          <span className="text-[length:var(--fs-xs)] uppercase tracking-[0.12em] text-(--ui-muted)">
+          <span className="text-[length:var(--fs-sm)] text-(--ui-muted)">
             Engine
           </span>
           <SegmentedControl

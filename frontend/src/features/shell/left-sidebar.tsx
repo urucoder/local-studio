@@ -13,23 +13,29 @@ import { Menu } from "@/ui/icon-registry";
 import { useShallow } from "zustand/react/shallow";
 import { DEFAULT_SIDEBAR_WIDTH, useAppStore } from "@/store";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
-import { useOpenSessions } from "@/features/agent/ui/use-open-sessions";
+import { useOpenSessions, useSessionActivity } from "@/features/agent/session-index";
 import { hrefWithOpenNonce } from "@/features/agent/ui/projects-nav/helpers";
 import { DesktopSidebar } from "@/features/shell/left-sidebar-desktop";
 import {
   loadProjectsNavSection,
   loadSessionsCommand,
+  type NavView,
   type ProjectsNavSectionComponent,
   type SessionsCommandComponent,
 } from "@/features/shell/left-sidebar-lazy";
 import { MobileNavigationDrawer } from "@/features/shell/left-sidebar-mobile-drawer";
 import {
-  isRouteActive,
   mobilePageTitle,
   routeHidesAppSidebar,
+  routeOwnsMobileHeader,
 } from "@/features/shell/left-sidebar-nav";
 
-const SIDEBAR_MIN_WIDTH = 180;
+// Search and recents are the same palette in two modes: one lazy chunk, one
+// dialog, and only ever one of them open.
+type PaletteMode = "search" | null;
+
+// Codex desktop sidebar clamp: min(240px, 275px preferred, max min(520px, 100vw-320px)).
+const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 520;
 function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return DEFAULT_SIDEBAR_WIDTH;
@@ -60,10 +66,19 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
   );
   const isExpanded = desktopSidebarPinnedOpen;
   const clampedSidebarWidth = clampSidebarWidth(sidebarWidth);
-  // The chat session carries its own header (hamburger + right-panel toggle),
-  // so the app topbar would be a second stacked row there.
-  const chatSessionRoute = isRouteActive(pathname, "/agent");
-  const [searchOpen, setSearchOpen] = useState(false);
+  // Agent routes carry their own header (hamburger + surface title), so the app
+  // topbar would be a second stacked row there.
+  const ownsMobileHeader = routeOwnsMobileHeader(pathname);
+  const [paletteMode, setPaletteMode] = useState<PaletteMode>(null);
+  // The bell swaps the nav body rather than opening a panel; projects is the
+  // resting view, so the toggle always has somewhere to fall back to.
+  const [navView, setNavView] = useState<NavView>("projects");
+  const sessionActivity = useSessionActivity();
+  // The bell used to carry a bare "something happened" dot, which said nothing
+  // about what. What the nav can usefully show is session state: how many runs
+  // are live right now, and how many finished while you were elsewhere.
+  const runningSessions = sessionActivity.active.size;
+  const finishedSessions = sessionActivity.finished.size;
   const activeSessions = useOpenSessions();
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [projectsNavReady, setProjectsNavReady] = useState(projectsNavImmediate);
@@ -92,7 +107,7 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setSearchOpen((open) => !open);
+        setPaletteMode((mode) => (mode === "search" ? null : "search"));
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -124,7 +139,7 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
   }, [ProjectsNavSection, projectsNavReady]);
 
   useMountSubscription(() => {
-    if (!searchOpen || SessionsCommand) return;
+    if (!paletteMode || SessionsCommand) return;
     let cancelled = false;
     void loadSessionsCommand().then((Component) => {
       if (!cancelled) setSessionsCommand(() => Component);
@@ -132,7 +147,7 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [SessionsCommand, searchOpen]);
+  }, [SessionsCommand, paletteMode]);
 
   const startSidebarResize = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -188,11 +203,17 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
           if (!hidesAppSidebar && !projectsNavReady) setProjectsNavReady(true);
         }}
         onSetPinnedOpen={setDesktopSidebarPinnedOpen}
-        onOpenSearch={() => setSearchOpen(true)}
+        onOpenSearch={() => setPaletteMode("search")}
+        navView={navView}
+        onToggleNavView={() =>
+          setNavView((view) => (view === "notifications" ? "projects" : "notifications"))
+        }
+        runningSessions={runningSessions}
+        finishedSessions={finishedSessions}
         onNewTask={openNewTask}
       />
 
-      {chatSessionRoute ? null : (
+      {ownsMobileHeader ? null : (
         <div className="mobile-pwa-topbar md:hidden fixed left-0 right-0 top-0 z-40 border-b border-(--border)/70 bg-(--bg) px-4">
           <Link href="/" className="flex min-w-0 items-center gap-2.5">
             <span className="truncate text-[length:var(--fs-base)] font-semibold tracking-tight text-(--fg)">
@@ -226,14 +247,14 @@ export function LeftSidebar({ children }: { children: ReactNode }) {
 
       {SessionsCommand ? (
         <SessionsCommand
-          open={searchOpen}
-          onClose={() => setSearchOpen(false)}
+          open={paletteMode !== null}
+          onClose={() => setPaletteMode(null)}
           activeSessions={activeSessions}
         />
       ) : null}
 
       <main
-        data-no-topbar={chatSessionRoute ? "true" : undefined}
+        data-no-topbar={ownsMobileHeader ? "true" : undefined}
         className="mobile-pwa-main flex-1 min-w-0 min-h-0 overflow-y-auto overflow-x-hidden bg-(--agent-bg) md:pt-0"
       >
         {children}

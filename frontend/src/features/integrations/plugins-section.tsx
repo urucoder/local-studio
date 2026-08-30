@@ -1,543 +1,456 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Schema } from "effect";
 import {
-  PluginRuntimeResponseSchema,
-  type PluginRuntimeView,
-} from "@local-studio/agent-runtime/plugin-runtime-contract";
-import { ApiErrorResponseSchema } from "@local-studio/agent-runtime/api-contract";
-import { Alert, Button, ModelButton, SearchInput, UiModal, UiModalHeader } from "@/ui";
-import { Eye, X } from "@/ui/icon-registry";
+  PLUGIN_TEMPLATE,
+  PluginSourceResponseSchema,
+  PluginsResponseSchema,
+  isValidPluginId,
+  type PluginRow,
+} from "@local-studio/agent-runtime/plugin-contract";
+import { Alert, Button, FormField, Input, RefreshIconButton, SearchInput, StatusPill } from "@/ui";
+import { Plus, Trash2 } from "@/ui/icon-registry";
 import { ResourceDrawer, ResourceDrawerSection, ResourceFact } from "@/ui/resource-drawer";
 import { ResourceLogo } from "@/ui/resource-logo";
-import { useMountSubscription } from "@/hooks/use-mount-subscription";
-import { SettingsButton, SettingsGroup, type StatusTone } from "@/features/settings/settings-ui";
 import {
-  ModelRow,
-  ModelSection,
-  ModelStatus,
-  ModelValue,
-} from "@/features/recipes/recipes-content/model-page";
-import { GoogleAccountModal } from "./google-account-modal";
-import { ChatterboxVoiceModal } from "./chatterbox-voice-modal";
-import { speechStatusLabel, speechStatusTone } from "./chatterbox-voice-model";
-import { useSpeechStore, type SpeechSnapshot } from "./chatterbox-voice-store";
+  DataRow,
+  EndCell,
+  GroupRow,
+  HeadCell,
+  IdentityCell,
+  RowAction,
+  StatusText,
+  TableFrame,
+  TableNotice,
+  TableSection,
+  TextCell,
+} from "@/features/recipes/recipes-content/catalog-table-shell";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { jsonBody, requestAgentJson } from "./agent-json";
 
-type PluginStatus = { label: string; tone: StatusTone };
+/**
+ * Plugins the user writes, in the directory the agent already reads.
+ *
+ * A plugin here is a pi extension: one TypeScript module that registers tools
+ * onto every session. There is no registry file and no install step — the list
+ * below *is* the contents of `<agentDir>/extensions`, so what the table says is
+ * loaded and what is loaded cannot disagree. Disabling renames the file rather
+ * than recording a flag somewhere only this app can see.
+ *
+ * The honesty this surface owes the user is different from the connectors tab's.
+ * A connector runs a command in a child process; a plugin runs *inside* the
+ * agent, so it is not sandboxed from anything the agent can touch. Saving still
+ * executes nothing — the file is picked up when the next session is built —
+ * but "next message" is a short fuse and the drawer says so plainly.
+ */
 
-function responseError(body: unknown, fallback: string): string {
-  try {
-    return Schema.decodeUnknownSync(ApiErrorResponseSchema)(body).error;
-  } catch {
-    return fallback;
-  }
-}
+const decodePlugins = Schema.decodeUnknownSync(PluginsResponseSchema);
+const decodeSource = Schema.decodeUnknownSync(PluginSourceResponseSchema);
 
-async function pluginResponse(response: Response, fallback: string) {
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(responseError(body, fallback));
-  return Schema.decodeUnknownSync(PluginRuntimeResponseSchema)(body);
-}
+const CODE_CLASS =
+  "w-full rounded-[var(--ui-radius)] border border-(--ui-separator) bg-(--ui-surface) px-3 py-2 font-mono text-[length:var(--fs-sm)] leading-5 text-(--ui-fg) focus:border-(--ui-accent)/60 focus:outline-none";
 
-function capabilitySummary(plugin: PluginRuntimeView): string {
-  if (plugin.hostCapability?.capability === "speech") {
-    return `local speech · voice cloning · v${plugin.version}`;
-  }
-  return [
-    plugin.provides.skills ? "skills" : null,
-    plugin.provides.mcpServers || plugin.account
-      ? `${plugin.tools.serverCount} ${plugin.account ? "remote " : ""}MCP ${plugin.tools.serverCount === 1 ? "server" : "servers"}`
-      : null,
-    plugin.provides.apps ? "account app" : null,
-    `v${plugin.version}`,
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join(" · ");
-}
+const formatBytes = (bytes: number): string =>
+  bytes < 1024 ? `${bytes} B` : `${Math.round(bytes / 102.4) / 10} KB`;
 
-function pluginStatus(plugin: PluginRuntimeView, speech: SpeechSnapshot): PluginStatus {
-  if (plugin.hostCapability?.capability === "speech") {
-    if (!speech.available && !speech.loading) return { label: "Unavailable", tone: "danger" };
-    if (speech.status) {
-      return {
-        label: speechStatusLabel(speech.status),
-        tone: speechStatusTone(speech.status),
-      };
-    }
-    if (speech.loading) return { label: "Checking", tone: "default" };
-    return { label: speech.error ? "Unavailable" : "Configure", tone: "warning" };
-  }
-  if (plugin.account && !plugin.account.configured) return { label: "Setup", tone: "warning" };
-  if (plugin.account && !plugin.account.connected) return { label: "Sign in", tone: "warning" };
-  if (plugin.tools.state === "enabled") {
-    return {
-      label: `Observe · ${plugin.tools.allowedToolCount} ${plugin.tools.allowedToolCount === 1 ? "tool" : "tools"}`,
-      tone: "good",
-    };
-  }
-  if (plugin.tools.state === "available") return { label: "Available", tone: "info" };
-  if (plugin.tools.state === "disabled") return { label: "Off", tone: "default" };
-  if (plugin.tools.state === "invalid") return { label: "Unavailable", tone: "danger" };
-  if (plugin.tools.state === "configuration_required" || plugin.provides.apps) {
-    return { label: "Adapter needed", tone: "warning" };
-  }
-  return { label: "Skills", tone: "default" };
-}
+const PluginBadge = ({ plugin }: { plugin: PluginRow | null }) =>
+  plugin ? (
+    <StatusPill tone={plugin.enabled ? "good" : "default"}>
+      {plugin.enabled ? "loaded" : "disabled"}
+    </StatusPill>
+  ) : null;
 
-function activationAction(plugin: PluginRuntimeView): "account" | "connect" | "disconnect" | null {
-  if (plugin.hostCapability) return null;
-  if (plugin.account && !plugin.account.connected) return "account";
-  if (plugin.account) {
-    return plugin.tools.state === "available" || plugin.tools.state === "disabled"
-      ? "connect"
-      : null;
-  }
-  if (plugin.tools.state === "enabled") return "disconnect";
-  if (plugin.tools.state === "available" || plugin.tools.state === "disabled") return "connect";
-  return null;
-}
-
-function PluginRowsSkeleton() {
-  return (
-    <>
-      {[0, 1, 2].map((index) => (
-        <div key={index} className="grid animate-pulse gap-3 px-4 py-3 md:grid-cols-2">
-          <div className="space-y-2">
-            <div className="h-3 w-32 rounded bg-(--ui-hover)" />
-            <div className="h-2.5 w-56 max-w-full rounded bg-(--ui-hover)/70" />
-          </div>
-          <div className="flex items-center justify-end gap-3">
-            <div className="h-2.5 w-36 rounded bg-(--ui-hover)/70" />
-            <div className="h-5 w-20 rounded-full bg-(--ui-hover)" />
-          </div>
-        </div>
-      ))}
-    </>
-  );
-}
-
-type PluginRowAction = ReturnType<typeof activationAction>;
-
-function pluginActionLabel(plugin: PluginRuntimeView, action: PluginRowAction): string {
-  if (action === "account") return plugin.account?.configured ? "Sign in" : "Set up";
-  if (action === "connect") return "Connect";
-  return "Disconnect";
-}
-
-function PluginRowActions({
-  plugin,
-  action,
-  busy,
-  hostActionLabel,
-  onConnect,
-  onDisconnect,
-  onAccount,
-  onHostCapability,
-}: {
-  plugin: PluginRuntimeView;
-  action: PluginRowAction;
-  busy: boolean;
-  hostActionLabel: string;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onAccount: () => void;
-  onHostCapability: () => void;
-}) {
-  const actionLabel = action ? pluginActionLabel(plugin, action) : "";
-  const handleAction =
-    action === "account" ? onAccount : action === "connect" ? onConnect : onDisconnect;
-  return (
-    <>
-      {plugin.hostCapability ? (
-        <ModelButton
-          onClick={onHostCapability}
-          disabled={busy}
-          aria-label={`${hostActionLabel} ${plugin.displayName}`}
-        >
-          {hostActionLabel}
-        </ModelButton>
-      ) : null}
-      {plugin.account?.connected ? (
-        <ModelButton
-          onClick={onAccount}
-          disabled={busy}
-          aria-label={`Manage ${plugin.displayName}`}
-        >
-          Manage
-        </ModelButton>
-      ) : null}
-      {action ? (
-        <ModelButton
-          onClick={handleAction}
-          disabled={busy}
-          aria-label={`${actionLabel} ${plugin.displayName}`}
-        >
-          {busy ? "Working" : actionLabel}
-        </ModelButton>
-      ) : null}
-    </>
-  );
-}
-
-function PluginRow({
-  plugin,
-  speech,
-  busy,
-  onOpen,
-  onConnect,
-  onDisconnect,
-  onAccount,
-  onHostCapability,
-}: {
-  plugin: PluginRuntimeView;
-  speech: SpeechSnapshot;
-  busy: boolean;
-  onOpen: () => void;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onAccount: () => void;
-  onHostCapability: () => void;
-}) {
-  const status = pluginStatus(plugin, speech);
-  const action = activationAction(plugin);
-  const hostActionLabel = speech.status?.install.phase === "ready" ? "Manage" : "Configure";
-  return (
-    <ModelRow
-      label={plugin.displayName}
-      description={plugin.description || plugin.category}
-      leading={
-        <ResourceLogo
-          identity={plugin.id}
-          label={plugin.displayName}
-          company={plugin.source}
-          brandColor={plugin.brandColor}
-        />
+const PluginFacts = ({ plugin }: { plugin: PluginRow }) => (
+  <ResourceDrawerSection title="On disk">
+    <ResourceFact label="File" value={plugin.file} mono />
+    <ResourceFact label="Path" value={plugin.path} mono />
+    <ResourceFact
+      label="State"
+      value={
+        plugin.enabled
+          ? "Loaded into every new session"
+          : "Renamed with a .off suffix, so the agent skips it"
       }
-      value={<ModelValue mono>{`${plugin.source} · ${capabilitySummary(plugin)}`}</ModelValue>}
-      status={<ModelStatus tone={status.tone}>{status.label}</ModelStatus>}
-      actions={
-        action || plugin.account?.connected || plugin.hostCapability ? (
-          <PluginRowActions
-            plugin={plugin}
-            action={action}
-            busy={busy}
-            hostActionLabel={hostActionLabel}
-            onConnect={onConnect}
-            onDisconnect={onDisconnect}
-            onAccount={onAccount}
-            onHostCapability={onHostCapability}
-          />
-        ) : undefined
-      }
-      onClick={onOpen}
-    >
-      {plugin.tools.reason ? (
-        <div className="text-[length:var(--fs-sm)] text-(--ui-muted)">{plugin.tools.reason}</div>
-      ) : null}
-      {plugin.account?.email ? (
-        <div className="text-[length:var(--fs-sm)] text-(--ui-muted)">{plugin.account.email}</div>
-      ) : null}
-    </ModelRow>
-  );
-}
+    />
+  </ResourceDrawerSection>
+);
 
-function PluginDrawer({
+/**
+ * The source lives in the section, not in here.
+ *
+ * Opening a plugin fetches its file, so the text arrives one tick after the
+ * drawer does. A local `useState(initialSource)` would latch the empty string
+ * it opened with and there is no effect to re-seed it from — so the section
+ * owns the buffer and this component only edits it.
+ */
+function PluginEditorDrawer({
   plugin,
-  speech,
-  busy,
+  source,
+  onSourceChange,
+  loadingSource,
   onClose,
-  onConnect,
-  onDisconnect,
-  onAccount,
-  onHostCapability,
+  onChanged,
 }: {
-  plugin: PluginRuntimeView;
-  speech: SpeechSnapshot;
-  busy: boolean;
+  /** Null while composing a new plugin — the id is still being chosen. */
+  plugin: PluginRow | null;
+  source: string;
+  onSourceChange: (next: string) => void;
+  loadingSource: boolean;
   onClose: () => void;
-  onConnect: () => void;
-  onDisconnect: () => void;
-  onAccount: () => void;
-  onHostCapability: () => void;
+  onChanged: (plugins: readonly PluginRow[]) => void;
 }) {
-  const status = pluginStatus(plugin, speech);
-  const action = activationAction(plugin);
-  const hostActionLabel = speech.status?.install.phase === "ready" ? "Manage" : "Configure";
-  const capabilities = [
-    ...plugin.capabilities,
-    plugin.provides.skills ? "Skills" : null,
-    plugin.provides.mcpServers ? "MCP tools" : null,
-    plugin.provides.apps ? "App integration" : null,
-  ].filter((value): value is string => Boolean(value));
-  return (
-    <ResourceDrawer
-      title={plugin.displayName}
-      icon={
-        <ResourceLogo
-          identity={plugin.id}
-          label={plugin.displayName}
-          company={plugin.source}
-          brandColor={plugin.brandColor}
-        />
-      }
-      badge={<ModelStatus tone={status.tone}>{status.label}</ModelStatus>}
-      status={`${plugin.source} · ${plugin.category} · v${plugin.version}`}
-      footer={
-        action || plugin.account?.connected || plugin.hostCapability ? (
-          <PluginRowActions
-            plugin={plugin}
-            action={action}
-            busy={busy}
-            hostActionLabel={hostActionLabel}
-            onConnect={onConnect}
-            onDisconnect={onDisconnect}
-            onAccount={onAccount}
-            onHostCapability={onHostCapability}
-          />
-        ) : null
-      }
-      onClose={onClose}
-    >
-      <p className="mb-6 text-[length:var(--fs-base)] leading-relaxed text-(--ui-muted)">
-        {plugin.description || "No plugin description was provided."}
-      </p>
-      <ResourceDrawerSection title="Identity">
-        <ResourceFact label="Company or source" value={plugin.source} />
-        <ResourceFact label="Category" value={plugin.category} />
-        <ResourceFact label="Plugin ID" value={plugin.id} mono />
-        <ResourceFact label="Version" value={plugin.version} mono />
-      </ResourceDrawerSection>
-      <ResourceDrawerSection title="Capabilities">
-        <ResourceFact label="Provides" value={capabilities.join(" · ") || "Skill bundle"} />
-        <ResourceFact label="Tool servers" value={String(plugin.tools.serverCount)} mono />
-        <ResourceFact label="Allowed tools" value={String(plugin.tools.allowedToolCount)} mono />
-        <ResourceFact label="Mode" value={plugin.tools.mode ?? "not connected"} mono />
-      </ResourceDrawerSection>
-      {plugin.account ? (
-        <ResourceDrawerSection title="Account">
-          <ResourceFact label="Provider" value={plugin.account.provider} />
-          <ResourceFact
-            label="Connection"
-            value={plugin.account.connected ? "Connected" : "Not connected"}
-          />
-          {plugin.account.email ? (
-            <ResourceFact label="Account" value={plugin.account.email} />
-          ) : null}
-        </ResourceDrawerSection>
-      ) : null}
-    </ResourceDrawer>
-  );
-}
-
-export function PluginsSection() {
-  const speech = useSpeechStore();
-  const [plugins, setPlugins] = useState<readonly PluginRuntimeView[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [id, setId] = useState(plugin?.id ?? "");
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [pending, setPending] = useState<PluginRuntimeView | null>(null);
-  const [selectedPlugin, setSelectedPlugin] = useState<PluginRuntimeView | null>(null);
-  const [accountPlugin, setAccountPlugin] = useState<PluginRuntimeView | null>(null);
-  const [speechPlugin, setSpeechPlugin] = useState<PluginRuntimeView | null>(null);
-  const requestGeneration = useRef(0);
+  const creating = plugin === null;
+  const named = id.trim();
+  const idError =
+    creating && named && !isValidPluginId(named)
+      ? "Use lowercase letters, digits, and hyphens."
+      : "";
 
-  const loadPlugins = useCallback(() => {
-    const generation = ++requestGeneration.current;
-    return fetch("/api/agent/plugins", { cache: "no-store" })
-      .then(async (response) => {
-        const payload = await pluginResponse(response, "Plugin discovery failed");
-        if (generation !== requestGeneration.current) return;
-        setPlugins(payload.plugins);
-        setError("");
-      })
-      .catch((loadError: unknown) => {
-        if (generation !== requestGeneration.current) return;
-        setError(loadError instanceof Error ? loadError.message : "Plugin discovery failed");
-      })
-      .finally(() => {
-        if (generation === requestGeneration.current) setLoaded(true);
-      });
-  }, []);
-
-  useMountSubscription(() => {
-    void loadPlugins();
-  }, [loadPlugins]);
-
-  const handleAccountChanged = useCallback(() => {
-    void loadPlugins();
-  }, [loadPlugins]);
-
-  const visiblePlugins = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return plugins;
-    return plugins.filter((plugin) =>
-      `${plugin.displayName} ${plugin.description} ${plugin.category} ${capabilitySummary(plugin)}`
-        .toLowerCase()
-        .includes(normalized),
-    );
-  }, [plugins, query]);
-
-  const setEnabled = async (plugin: PluginRuntimeView, enabled: boolean) => {
-    const generation = ++requestGeneration.current;
-    setBusyId(plugin.id);
+  const save = async () => {
+    setSaving(true);
     setError("");
     try {
-      const response = await fetch(`/api/agent/plugins/${encodeURIComponent(plugin.id)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      const payload = await pluginResponse(response, "Plugin activation failed");
-      if (generation !== requestGeneration.current) return;
-      setPlugins(payload.plugins);
-      setPending(null);
-    } catch (activationError) {
-      if (generation !== requestGeneration.current) return;
-      setError(
-        activationError instanceof Error ? activationError.message : "Plugin activation failed",
+      const { plugins } = await requestAgentJson(
+        "/api/agent/plugins",
+        decodePlugins,
+        jsonBody({ id: named, source }),
       );
+      onChanged(plugins);
+      onClose();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Plugin save failed");
     } finally {
-      setBusyId((current) => (current === plugin.id ? null : current));
+      setSaving(false);
     }
   };
 
   return (
-    <>
-      {error ? (
-        <div className="mb-4">
-          <Alert variant="error">{error}</Alert>
+    <ResourceDrawer
+      title={plugin?.id ?? "New plugin"}
+      icon={<ResourceLogo identity={named || "plugin"} label={named || "plugin"} />}
+      badge={<PluginBadge plugin={plugin} />}
+      status={plugin?.path ?? "Saved as a .ts file in the agent's extensions directory"}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            loading={saving}
+            disabled={!named || Boolean(idError) || loadingSource}
+            onClick={() => void save()}
+          >
+            {creating ? "Create plugin" : "Save plugin"}
+          </Button>
+        </>
+      }
+      onClose={onClose}
+      width={860}
+    >
+      <Alert variant="warning" className="mb-6">
+        A plugin runs inside the agent process with your user account — the same reach as the
+        agent itself, with no sandbox between them. Saving writes the file and nothing more; the
+        code first runs when your next message rebuilds the session.
+      </Alert>
+
+      {creating ? (
+        <div className="mb-5">
+          <FormField
+            label="Plugin name"
+            description="Becomes the filename and cannot be changed later."
+            error={idError || undefined}
+          >
+            <Input
+              value={id}
+              onChange={(event) => setId(event.target.value)}
+              placeholder="my-tools"
+              className="font-mono"
+            />
+          </FormField>
         </div>
       ) : null}
-      <ModelSection
-        title="Plugins"
-        description="Capability bundles from Local Studio and Codex, with their company, tools, accounts, and skills."
-        actions={
-          <ModelStatus tone={error ? "warning" : loaded ? "good" : "default"}>
-            {loaded ? `${visiblePlugins.length} of ${plugins.length}` : "discovering"}
-          </ModelStatus>
+
+      <section className="mb-6">
+        <div className="mb-2">
+          <h3 className="text-[length:var(--fs-base)] font-medium text-(--ui-fg)">Source</h3>
+          <p className="mt-0.5 text-[length:var(--fs-sm)] text-(--ui-muted)">
+            TypeScript, compiled by the agent on load. Imports resolve against the agent&rsquo;s
+            own dependencies.
+          </p>
+        </div>
+        <textarea
+          value={loadingSource ? "Loading…" : source}
+          onChange={(event) => onSourceChange(event.target.value)}
+          readOnly={loadingSource}
+          spellCheck={false}
+          rows={22}
+          aria-label="Plugin source"
+          className={CODE_CLASS}
+        />
+      </section>
+
+      {plugin ? <PluginFacts plugin={plugin} /> : null}
+
+      {error ? <p className="mt-4 text-[length:var(--fs-sm)] text-(--ui-danger)">{error}</p> : null}
+    </ResourceDrawer>
+  );
+}
+
+function PluginRowView({
+  plugin,
+  onOpen,
+  onChanged,
+}: {
+  plugin: PluginRow;
+  onOpen: () => void;
+  onChanged: (plugins: readonly PluginRow[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [rowError, setRowError] = useState("");
+
+  const run = (url: string, init: RequestInit, failure: string) => {
+    setBusy(true);
+    setRowError("");
+    void requestAgentJson(url, decodePlugins, init)
+      .then(({ plugins }) => onChanged(plugins))
+      .catch((error: unknown) => setRowError(error instanceof Error ? error.message : failure))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <DataRow
+      onOpen={plugin.read_only ? undefined : onOpen}
+      ariaLabel={`Open ${plugin.id}`}
+      dimmed={!plugin.enabled}
+    >
+      <IdentityCell
+        leading={<ResourceLogo identity={plugin.id} label={plugin.id} />}
+        label={plugin.id}
+        description={
+          rowError ||
+          plugin.note ||
+          (plugin.read_only
+            ? "A directory extension — edit it in your editor"
+            : `${formatBytes(plugin.bytes)} · ${plugin.file}`)
         }
-      >
-        <ModelRow
-          label="Search plugins"
-          description="Name, company, category, capability, or version."
-          control={
+      />
+      <TextCell mono title={plugin.path}>
+        {plugin.path}
+      </TextCell>
+      <EndCell>
+        <div className="flex items-center justify-end gap-2">
+          <StatusText tone={plugin.enabled ? "ok" : "dim"}>
+            {plugin.builtin ? (plugin.enabled ? "loaded" : "inactive") : plugin.enabled ? "loaded" : "disabled"}
+          </StatusText>
+          {plugin.read_only ? null : (
+            <>
+              <RowAction
+                alwaysVisible
+                disabled={busy}
+                onClick={() =>
+                  run(
+                    "/api/agent/plugins",
+                    jsonBody({ id: plugin.id, enabled: !plugin.enabled }),
+                    "Could not change this plugin",
+                  )
+                }
+                title={
+                  plugin.enabled
+                    ? "Stop loading this plugin into new sessions"
+                    : "Load this plugin from your next message"
+                }
+              >
+                {plugin.enabled ? "Disable" : "Enable"}
+              </RowAction>
+              <RowAction
+                alwaysVisible
+                disabled={busy}
+                onClick={() =>
+                  run(
+                    `/api/agent/plugins?id=${encodeURIComponent(plugin.id)}`,
+                    { method: "DELETE" },
+                    "Could not delete this plugin",
+                  )
+                }
+                tone="danger"
+                title={`Delete ${plugin.file}`}
+              >
+                <Trash2 className="h-3 w-3" />
+              </RowAction>
+            </>
+          )}
+        </div>
+      </EndCell>
+    </DataRow>
+  );
+}
+
+export function PluginsSection() {
+  const [plugins, setPlugins] = useState<readonly PluginRow[]>([]);
+  const [directory, setDirectory] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<PluginRow | null>(null);
+  const [composing, setComposing] = useState(false);
+  const [source, setSource] = useState("");
+  const [loadingSource, setLoadingSource] = useState(false);
+
+  const refresh = useCallback(() => {
+    setRefreshing(true);
+    void requestAgentJson("/api/agent/plugins", decodePlugins)
+      .then((payload) => {
+        setPlugins(payload.plugins);
+        setDirectory(payload.directory);
+        setError("");
+      })
+      .catch((loadError: unknown) => {
+        setPlugins([]);
+        setError(loadError instanceof Error ? loadError.message : "Plugin discovery failed");
+      })
+      .finally(() => {
+        setLoaded(true);
+        setRefreshing(false);
+      });
+  }, []);
+
+  useMountSubscription(() => {
+    refresh();
+  }, [refresh]);
+
+  const openPlugin = (plugin: PluginRow) => {
+    setEditing(plugin);
+    setComposing(false);
+    setSource("");
+    setLoadingSource(true);
+    void requestAgentJson(
+      `/api/agent/plugins/source?id=${encodeURIComponent(plugin.id)}`,
+      decodeSource,
+    )
+      .then((payload) => setSource(payload.source))
+      .catch((readError: unknown) =>
+        setSource(`// ${readError instanceof Error ? readError.message : "could not read"}`),
+      )
+      .finally(() => setLoadingSource(false));
+  };
+
+  const visible = useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) return plugins;
+    return plugins.filter((plugin) =>
+      `${plugin.id} ${plugin.file}`.toLowerCase().includes(normalized),
+    );
+  }, [plugins, query]);
+
+  const builtins = useMemo(() => visible.filter((plugin) => plugin.builtin), [visible]);
+  const authored = useMemo(() => visible.filter((plugin) => !plugin.builtin), [visible]);
+
+  const closeDrawer = () => {
+    setEditing(null);
+    setComposing(false);
+    setSource("");
+  };
+
+  return (
+    <>
+      <TableSection
+        title="Plugins"
+        description={
+          directory
+            ? `TypeScript modules that add tools to every session. Read from ${directory}.`
+            : "TypeScript modules that add tools to every session."
+        }
+        actions={
+          <div className="flex items-center gap-2">
             <SearchInput
               value={query}
               onChange={setQuery}
               placeholder="Search plugins"
-              className="w-full"
+              className="w-56"
             />
-          }
-          status={<ModelStatus>{visiblePlugins.length}</ModelStatus>}
-        />
-        {!loaded ? (
-          <PluginRowsSkeleton />
-        ) : visiblePlugins.length ? (
-          visiblePlugins.map((plugin) => (
-            <PluginRow
-              key={plugin.id}
-              plugin={plugin}
-              speech={speech}
-              busy={busyId === plugin.id}
-              onOpen={() => setSelectedPlugin(plugin)}
-              onConnect={() => {
-                setSelectedPlugin(null);
-                setPending(plugin);
-              }}
-              onDisconnect={() => {
-                setSelectedPlugin(null);
-                void setEnabled(plugin, false);
-              }}
-              onAccount={() => {
-                setSelectedPlugin(null);
-                setAccountPlugin(plugin);
-              }}
-              onHostCapability={() => {
-                setSelectedPlugin(null);
-                setSpeechPlugin(plugin);
-              }}
-            />
-          ))
-        ) : (
-          <div className="px-4 py-8 text-center text-[length:var(--fs-md)] text-(--ui-muted)">
-            {plugins.length ? `No plugins match “${query}”.` : "No plugin manifests found."}
-          </div>
-        )}
-      </ModelSection>
-      {selectedPlugin ? (
-        <PluginDrawer
-          plugin={selectedPlugin}
-          speech={speech}
-          busy={busyId === selectedPlugin.id}
-          onClose={() => setSelectedPlugin(null)}
-          onConnect={() => {
-            setSelectedPlugin(null);
-            setPending(selectedPlugin);
-          }}
-          onDisconnect={() => {
-            setSelectedPlugin(null);
-            void setEnabled(selectedPlugin, false);
-          }}
-          onAccount={() => {
-            setSelectedPlugin(null);
-            setAccountPlugin(selectedPlugin);
-          }}
-          onHostCapability={() => {
-            setSelectedPlugin(null);
-            setSpeechPlugin(selectedPlugin);
-          }}
-        />
-      ) : null}
-      <UiModal
-        isOpen={pending !== null}
-        onClose={() => !busyId && setPending(null)}
-        maxWidth="max-w-md"
-      >
-        <UiModalHeader
-          title={`Connect ${pending?.displayName ?? "plugin"}?`}
-          icon={
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg border border-(--ui-info)/30 bg-(--ui-info)/10">
-              <Eye className="h-4 w-4 text-(--ui-info)" />
-            </span>
-          }
-          onClose={() => !busyId && setPending(null)}
-          closeIcon={<X className="h-4 w-4" />}
-        />
-        <div className="space-y-5 px-6 py-5">
-          <Alert variant="info">
-            Observe mode starts this plugin locally and exposes only tools it declares read-only.
-            Desktop actions stay blocked until Local Studio has an action-time approval prompt.
-          </Alert>
-          <p className="text-sm leading-6 text-(--ui-muted)">
-            The bundle remains in its installed location. Disconnecting stops exposing its tools to
-            Workbench sessions.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setPending(null)} disabled={Boolean(busyId)}>
-              Cancel
-            </Button>
+            <StatusText tone={error ? "warn" : loaded ? "ok" : "dim"}>
+              {loaded ? `${visible.length} of ${plugins.length}` : "reading"}
+            </StatusText>
+            <RefreshIconButton onClick={refresh} loading={refreshing} label="Reload plugins" />
             <Button
-              onClick={() => pending && void setEnabled(pending, true)}
-              disabled={!pending || Boolean(busyId)}
-              loading={Boolean(busyId)}
+              size="sm"
+              onClick={() => {
+                setComposing(true);
+                setEditing(null);
+                setSource(PLUGIN_TEMPLATE);
+                setLoadingSource(false);
+              }}
             >
-              Connect in observe mode
+              <Plus className="h-3.5 w-3.5" />
+              New plugin
             </Button>
           </div>
-        </div>
-      </UiModal>
-      {accountPlugin?.account?.provider === "google" ? (
-        <GoogleAccountModal
-          accountId={accountPlugin.account.id}
-          displayName={accountPlugin.displayName}
-          onClose={() => setAccountPlugin(null)}
-          onChanged={handleAccountChanged}
+        }
+      >
+        {loaded && visible.length === 0 ? (
+          <TableNotice
+            title={plugins.length ? `No plugin matches “${query}”` : "No plugins yet"}
+            body={
+              error ||
+              "A plugin is one TypeScript file that registers tools onto every session. New plugin opens a working example you can edit and save — it starts as a file on disk, not as running code."
+            }
+          />
+        ) : (
+          <TableFrame minWidthClass="min-w-[40rem]">
+            <thead>
+              <tr>
+                <HeadCell>Plugin</HeadCell>
+                <HeadCell>File</HeadCell>
+                <HeadCell numeric>State</HeadCell>
+              </tr>
+            </thead>
+            <tbody>
+              {authored.length ? (
+                <GroupRow colSpan={3} label="Yours" blurb={directory || undefined} />
+              ) : null}
+              {authored.map((plugin) => (
+                <PluginRowView
+                  key={plugin.path}
+                  plugin={plugin}
+                  onOpen={() => openPlugin(plugin)}
+                  onChanged={setPlugins}
+                />
+              ))}
+              {builtins.length ? (
+                <GroupRow
+                  colSpan={3}
+                  label="Built in"
+                  blurb="Shipped with the app and loaded by the runtime, not from your extensions directory"
+                />
+              ) : null}
+              {builtins.map((plugin) => (
+                <PluginRowView
+                  key={plugin.path}
+                  plugin={plugin}
+                  onOpen={() => openPlugin(plugin)}
+                  onChanged={setPlugins}
+                />
+              ))}
+            </tbody>
+          </TableFrame>
+        )}
+      </TableSection>
+
+      {editing || composing ? (
+        <PluginEditorDrawer
+          key={editing?.id ?? "new"}
+          plugin={editing}
+          source={source}
+          onSourceChange={setSource}
+          loadingSource={loadingSource}
+          onClose={closeDrawer}
+          onChanged={setPlugins}
         />
-      ) : null}
-      {speechPlugin?.hostCapability?.capability === "speech" ? (
-        <ChatterboxVoiceModal key={speech.controllerKey} onClose={() => setSpeechPlugin(null)} />
       ) : null}
     </>
   );

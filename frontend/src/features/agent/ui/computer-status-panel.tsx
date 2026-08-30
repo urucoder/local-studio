@@ -8,6 +8,9 @@ import type { ComposerSkillRef } from "@/features/agent/composer-context";
 import type { GitSummary, Project } from "@/features/agent/projects/types";
 import type { Session } from "@/features/agent/runtime/types";
 import type { AgentModel } from "@/features/agent/workspace/types";
+import { StatusHardwareSection } from "@/features/agent/ui/status-panel-hardware";
+import { StatusSubagentsSection } from "@/features/agent/ui/status-panel-subagents";
+import { StatusLine, fractionTone } from "@/features/agent/ui/status-panel-parts";
 
 type StatusTotals = {
   read: number;
@@ -67,6 +70,7 @@ export function ComputerStatusPanel({
 
       <StatusSection title="Session">
         <StatusRows rows={sessionTopRows(activeModel, focusedSession)} />
+        <ContextLine activeModel={activeModel} session={focusedSession} />
         <StatusActionRow label="Compact">
           <button
             type="button"
@@ -91,6 +95,13 @@ export function ComputerStatusPanel({
           <StatusRows rows={usageRows} />
         </StatusSection>
       ) : null}
+
+      <StatusSubagentsSection
+        piSessionId={focusedSession?.piSessionId ?? null}
+        cwd={focusedSession?.cwd ?? activeProject?.path ?? null}
+      />
+
+      <StatusHardwareSection />
 
       <UsedSkillsSection skills={sessionSkills} />
 
@@ -139,21 +150,39 @@ function sessionTokenCount(session: Session | null): number {
 }
 
 function sessionTopRows(activeModel: AgentModel | null, session: Session | null): StatusRowData[] {
-  const contextWindow = activeModel?.contextWindow ?? 0;
-  // Prefer the runtime's own context reading: tokenStats is only the last
-  // model call, so it reads far too low on a session mid-turn.
-  const contextTokens = session?.contextUsage?.tokens ?? sessionTokenCount(session);
-  const percent = session?.contextUsage?.percent;
+  // Context moved to ContextLine below, which draws it as a meter.
   return [
     { label: "State", value: session?.status ?? "idle" },
     { label: "Model", value: activeModel?.name ?? session?.modelId ?? "No model" },
-    {
-      label: "Context",
-      value: `${formatTokenCount(contextTokens)} / ${formatTokenCount(contextWindow)}${
-        typeof percent === "number" ? ` · ${Math.round(percent)}%` : ""
-      }`,
-    },
   ];
+}
+
+/** Context gets a meter rather than a plain row: how close the window is to
+ *  full is the one number on this sheet that decides an action (compact). */
+function ContextLine({
+  activeModel,
+  session,
+}: {
+  activeModel: AgentModel | null;
+  session: Session | null;
+}) {
+  const contextWindow = activeModel?.contextWindow ?? 0;
+  const contextTokens = session?.contextUsage?.tokens ?? sessionTokenCount(session);
+  const fraction =
+    typeof session?.contextUsage?.percent === "number"
+      ? session.contextUsage.percent / 100
+      : contextWindow > 0
+        ? contextTokens / contextWindow
+        : 0;
+  const percentText = fraction > 0 ? ` · ${Math.round(fraction * 100)}%` : "";
+  return (
+    <StatusLine
+      label="Context"
+      value={`${formatTokenCount(contextTokens)} / ${formatTokenCount(contextWindow)}${percentText}`}
+      tone={fractionTone(fraction)}
+      {...(contextWindow > 0 ? { fraction } : {})}
+    />
+  );
 }
 
 /** Lifetime spend. The context row above shows what the model can currently
@@ -269,7 +298,7 @@ function usedSkillsForSession(session: Session | null): ComposerSkillRef[] {
 function UsedSkillsSection({ skills }: { skills: ComposerSkillRef[] }) {
   return (
     <div className="mt-4 border-t border-(--border) pt-3">
-      <div className="mb-2 flex items-center gap-2 text-[length:var(--fs-xs)] uppercase tracking-wide text-(--dim)">
+      <div className="mb-2 flex items-center gap-2 text-[length:var(--fs-sm)] text-(--dim)">
         <span>Skills · session</span>
         <span className="font-mono normal-case tracking-normal">{skills.length}</span>
       </div>
@@ -329,7 +358,7 @@ function SessionSummary({
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <div className="truncate text-[length:var(--fs-2xs)] uppercase tracking-wide text-(--dim)">
+      <div className="truncate text-[length:var(--fs-sm)] text-(--dim)">
         {label}
       </div>
       <div className="mt-1 truncate text-[length:var(--fs-base)] text-(--fg)">{value}</div>
@@ -340,7 +369,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 function StatusSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="mt-4 border-t border-(--border) pt-3">
-      <div className="mb-2 text-[length:var(--fs-xs)] uppercase tracking-wide text-(--dim)">
+      <div className="mb-2 text-[length:var(--fs-sm)] text-(--dim)">
         {title}
       </div>
       <div className="grid gap-1">{children}</div>

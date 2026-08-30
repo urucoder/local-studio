@@ -1,9 +1,14 @@
 "use client";
 
 import { type ComponentType } from "react";
-import type { ActiveSession } from "@/features/agent/session-contracts";
+import type { ActiveSession } from "@/features/agent/session-index";
 
-export type ProjectsNavSectionComponent = ComponentType<{ expanded: boolean }>;
+export type NavView = "projects" | "notifications";
+
+export type ProjectsNavSectionComponent = ComponentType<{
+  expanded: boolean;
+  view: NavView;
+}>;
 
 export type SessionsCommandComponent = ComponentType<{
   open: boolean;

@@ -29,7 +29,11 @@ export type ExtensionUiRequest = {
  * subsystem (`useTools().selectionFor(id)`) keyed by the session id below.
  */
 export type Session = {
+  // Pane/client identity AND the opaque runtime key sent to the server. One
+  // per tab so tabs run independent agent sessions.
   id: SessionId;
+  // Pi session UUID (null = unstarted, will be assigned by pi when the first
+  // turn runs).
   piSessionId: string | null;
   projectId?: string;
   cwd?: string;
@@ -50,12 +54,25 @@ export type Session = {
   contextUsage?: RuntimeContextUsage | null;
   activeAssistantId?: string;
   lastEventSeq?: number;
+  // Outgoing pending follow-up messages. Drawn as chips above the input until
+  // Pi `queue_update` reconciles the canonical queue. Steering messages are
+  // sent as immediate control messages and are not surfaced in this queue UI.
   queue?: QueuedMessage[];
   extensionUiRequest?: ExtensionUiRequest;
   // Byte-offset cursor into the canonical log for paging older history into
   // view ("load earlier"). Set when a tail load left earlier events unread;
   // null/undefined once the whole log is loaded.
   historyCursor?: number | null;
+  /**
+   * These messages came from the localStorage snapshot, not from a replay.
+   *
+   * The snapshot exists so a reopened session paints instantly, but it is
+   * lossy by design — capped at 200 messages and 512KB — and it carries no
+   * history cursor. Anything deciding "do we already have this transcript?"
+   * has to tell the two apart, or the placeholder gets mistaken for the real
+   * thing and the replay that would load the rest never runs.
+   */
+  hydratedFromCache?: boolean;
 };
 
 export type SessionsMap = ReadonlyMap<SessionId, Session>;

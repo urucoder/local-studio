@@ -26,6 +26,8 @@ import {
 import { FileOpenActions } from "@/features/agent/ui/file-open-actions";
 import { Breadcrumb, fileTone, TreeFileList } from "@/features/agent/ui/filesystem-tree";
 import { useFilesystemPanelEffects } from "@/features/agent/ui/filesystem-panel-effects";
+import { useMountSubscription } from "@/hooks/use-mount-subscription";
+import { FILESYSTEM_CHANGED_EVENT } from "@/lib/workspace-events";
 
 type Props = { cwd: string | null };
 // eslint-disable-next-line complexity
@@ -55,6 +57,7 @@ export function FilesystemPanel({ cwd }: Props) {
   const [dirChildren, setDirChildren] = useState<Map<string, FsEntry[]>>(new Map());
   const [dirLoading, setDirLoading] = useState<Set<string>>(new Set());
   const [fileListOpen, setFileListOpen] = useState(true);
+  const [refreshRevision, setRefreshRevision] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const { fileOpenRequest } = useToolSelections();
   const { requestContextAttach } = useToolsActions();
@@ -66,12 +69,20 @@ export function FilesystemPanel({ cwd }: Props) {
   const pendingEditRef = useRef<{ caret: number; insert: string | null } | null>(null);
   const previewKind = useMemo(() => previewKindForOpenFile(openFile), [openFile]);
   const binaryPreview = isBinaryPreviewKind(previewKind);
+  const dirty = draftContent !== fileContent;
+  useMountSubscription(() => {
+    const refresh = () => setRefreshRevision((revision) => revision + 1);
+    window.addEventListener(FILESYSTEM_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(FILESYSTEM_CHANGED_EVENT, refresh);
+  }, []);
   useFilesystemPanelEffects({
     cwd: projectRoot,
     root,
     relPath,
     openFile,
     skipTextRead: binaryPreview,
+    refreshRevision,
+    preserveDraft: dirty,
     fileOpenRequest,
     lastOpenFileByProject,
     rootRef,
@@ -145,8 +156,11 @@ export function FilesystemPanel({ cwd }: Props) {
     },
     [dirChildren, fetchDirChildren],
   );
+  useMountSubscription(() => {
+    if (refreshRevision === 0) return;
+    for (const dir of expandedDirs) void fetchDirChildren(dir);
+  }, [expandedDirs, fetchDirChildren, refreshRevision]);
   const lines = useMemo(() => fileContent.split("\n"), [fileContent]);
-  const dirty = draftContent !== fileContent;
   const enterEditMode = useCallback(
     (line: number | null, insert: string | null) => {
       pendingEditRef.current = {
@@ -293,7 +307,7 @@ export function FilesystemPanel({ cwd }: Props) {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search files…"
-                className="h-7 w-full rounded-md border border-(--border) bg-(--color-input) px-2 text-[length:var(--fs-sm)] text-(--fg) outline-none placeholder:text-(--dim)/75 focus:border-(--border-hover)"
+                className="h-7 w-full rounded-md border border-(--border) bg-(--color-input) px-2 text-[length:var(--fs-sm)] text-(--fg) outline-none placeholder:text-(--dim)/75 focus:border-(--color-border-hover)"
                 spellCheck={false}
               />
               {searchQuery && (
@@ -375,9 +389,13 @@ export function FilesystemPanel({ cwd }: Props) {
             </div>
           ) : (
             <>
-              <div className="flex h-9 shrink-0 items-center justify-between gap-1 border-b border-(--border) bg-(--color-header) pr-2">
+              {/* min-h + wrap, not a fixed h-9: at narrow panel widths the
+                  action group (which grows a preview/code toggle on exactly
+                  the previewable files) used to overflow past the right edge,
+                  taking the font-size stepper with it. */}
+              <div className="flex min-h-9 shrink-0 flex-wrap items-center justify-between gap-1 border-b border-(--border) bg-(--color-header) pr-2">
                 <div
-                  className="relative flex h-full min-w-0 max-w-[55%] items-center gap-1.5 border-r border-(--border) bg-(--color-panel) px-3 text-[length:var(--fs-sm)] text-(--fg) after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-(--link)"
+                  className="relative flex h-9 min-w-0 max-w-[55%] items-center gap-1.5 border-r border-(--border) bg-(--color-panel) px-3 text-[length:var(--fs-sm)] text-(--fg) after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-(--link)"
                   title={openFile}
                 >
                   <File className={`h-3.5 w-3.5 shrink-0 ${fileTone(openFile)}`} />
@@ -482,7 +500,12 @@ export function FilesystemPanel({ cwd }: Props) {
                   style={{ fontSize, lineHeight: `${Math.round(fontSize * 1.5)}px` }}
                 />
               ) : previewKind && viewMode === "preview" ? (
-                <RenderedPreview content={fileContent} kind={previewKind} />
+                <RenderedPreview
+                  content={fileContent}
+                  kind={previewKind}
+                  fontSize={fontSize}
+                  cwd={root}
+                />
               ) : (
                 <FileViewer
                   key={openFile}

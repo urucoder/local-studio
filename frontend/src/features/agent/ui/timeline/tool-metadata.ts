@@ -1,4 +1,5 @@
 import type { ToolBlock } from "@/features/agent/messages";
+import type { PreviewHeight } from "@/ui/preview-scroll";
 
 export const FILE_WRITE_TOOL_NAMES = new Set([
   "write_file",
@@ -15,26 +16,31 @@ export const FILE_WRITE_TOOL_NAMES = new Set([
   "apply_edit",
   "replace_file",
   "str_replace_editor",
+  // Writing a note is writing a file. Named exactly rather than by adding
+  // "create"/"append" to the needle list below, which would sweep up every
+  // unrelated tool whose verb happens to be one of those.
+  "obsidian_create",
+  "obsidian_append",
 ]);
 
 const LANG_BY_EXT: Record<string, string> = {
-  ts: "ts",
-  tsx: "tsx",
-  js: "js",
-  jsx: "jsx",
+  ts: "typescript",
+  tsx: "typescript",
+  js: "javascript",
+  jsx: "javascript",
   json: "json",
-  md: "md",
-  html: "html",
-  htm: "html",
+  md: "markdown",
+  html: "xml",
+  htm: "xml",
   css: "css",
   scss: "scss",
-  py: "py",
-  rs: "rs",
+  py: "python",
+  rs: "rust",
   go: "go",
-  sh: "sh",
+  sh: "bash",
   yml: "yaml",
   yaml: "yaml",
-  toml: "toml",
+  toml: "ini",
   sql: "sql",
 };
 
@@ -139,6 +145,31 @@ export function toolArg(
 
 export type ToolKind = "edit" | "search" | "read" | "exec" | "browser" | "generic";
 
+export type ToolPreviewHeightOverrides = Partial<Record<ToolKind, PreviewHeight>>;
+
+export const TOOL_PREVIEW_HEIGHT_OPTIONS: Array<{ id: PreviewHeight; label: string }> = [
+  { id: "sm", label: "Small" },
+  { id: "md", label: "Medium" },
+  { id: "lg", label: "Large" },
+];
+
+export const TOOL_PREVIEW_KIND_LABELS: Record<ToolKind, string> = {
+  edit: "Edits",
+  search: "Searches",
+  read: "Reads",
+  exec: "Commands",
+  browser: "Browser",
+  generic: "Other tools",
+};
+
+export function toolPreviewHeightFor(
+  kind: ToolKind,
+  defaultHeight: PreviewHeight,
+  overrides: ToolPreviewHeightOverrides,
+): PreviewHeight {
+  return overrides[kind] ?? defaultHeight;
+}
+
 /**
  * ZCode node-taxonomy colors for tool kinds — color-codes each tool verb so the
  * timeline reads like ZCode's node taxonomy (command/file/session/skill nodes).
@@ -168,7 +199,7 @@ export function classifyTool(block: ToolBlock): ToolKind {
   if (hasAnyNeedle(name, ["search", "grep", "find", "ripgrep", "rg"])) return "search";
   if (hasAnyNeedle(name, ["read", "open", "cat", "view", "list"])) return "read";
   if (hasAnyNeedle(name, ["exec", "command", "shell", "bash", "run", "terminal"])) return "exec";
-  if (hasAnyNeedle(name, ["browser", "web", "open_url", "navigate"])) return "browser";
+  if (hasAnyNeedle(name, ["browser", "chrome", "web", "open_url", "navigate"])) return "browser";
   return "generic";
 }
 

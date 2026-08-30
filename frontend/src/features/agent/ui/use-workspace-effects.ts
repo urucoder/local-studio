@@ -6,6 +6,7 @@ import type { ToolsContextValue } from "@/features/agent/tools/context";
 import type { Session, SessionId } from "@/features/agent/runtime/types";
 import { shouldSubscribeRuntimeEvents } from "@/features/agent/runtime/runtime-cursor";
 import { sessionRuntimeController } from "@/features/agent/runtime/session-runtime-controller";
+import { openSessionListChangedSubscription } from "@/features/agent/runtime/session-list-changed";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
 
 function currentSearchParams(): URLSearchParams {
@@ -79,6 +80,9 @@ export function useWorkspaceRuntimeSync({ dispatch, sessions }: UseWorkspaceRunt
       getSession: (sessionId) => sessionsRef.current.find((session) => session.id === sessionId),
       getSessions: () => sessionsRef.current,
     });
+    return openSessionListChangedSubscription(() => {
+      sessionRuntimeController().pollNow();
+    });
   }, [dispatch]);
 
   const subscriptionKey = useMemo(() => runtimeSubscriptionKey(sessions), [sessions]);
@@ -92,6 +96,33 @@ export function useWorkspaceRuntimeSync({ dispatch, sessions }: UseWorkspaceRunt
   useMountSubscription(() => {
     sessionRuntimeController().pollNow();
   }, [registryKey]);
+
+  useMountSubscription(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    const controller = sessionRuntimeController();
+    let lastWakeAt = 0;
+    const wake = () => {
+      const now = Date.now();
+      if (now - lastWakeAt < 500) return;
+      lastWakeAt = now;
+      controller.reconcile(sessionsRef.current);
+      controller.pollNow();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted || document.visibilityState === "visible") wake();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("online", wake);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("online", wake);
+    };
+  }, []);
 
   useMountSubscription(
     () => () => {

@@ -36,7 +36,7 @@ export function RecipeModal({
   const engineStyle = engineNodeStyle(backend);
 
   return (
-    <Drawer width={880}>
+    <Drawer width={880} className="h-full">
       <DrawerHeader
         title={recipe.id ? recipe.name || "Edit Serve" : "New Serve"}
         badge={
@@ -95,8 +95,6 @@ export function RecipeModal({
               extraArgsText: model.extraArgsText,
               extraArgsError: model.extraArgsError,
               onExtraArgsChange: model.handleExtraArgsChange,
-              llamaConfigLoading: model.llamaConfigLoading,
-              llamaConfigHelp: model.llamaConfigHelp,
             }}
             command={{
               recipeSourceText: model.recipeSourceText,
