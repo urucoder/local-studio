@@ -10,17 +10,13 @@ import { DownloadStore } from "./modules/engines/downloads/download-store";
 import {
   createLaunchFailureBudget,
   type LaunchFailureBudget,
-} from "./modules/engines/launch-failure-budget";
-import { createComputeBridge, type ComputeBridge } from "./modules/compute/bridge";
+} from "./modules/compute/launch-failure-budget";
 import { makeCompute, type Compute } from "./modules/compute/service";
 import { shutdownEngineJobs } from "./modules/engines/runtimes/engine-jobs";
 import { shutdownRuntimeInfo } from "./modules/engines/runtimes/runtime-info";
 import { RecipeStore } from "./modules/models/recipes/recipe-store";
-import { SpeechService } from "./modules/speech/service";
 import { EventManager } from "./modules/system/event-manager";
-import { createGpuLeaseRegistry, type GpuLeaseRegistry } from "./modules/system/gpu-leases";
 import { PeakMetricsStore, LifetimeMetricsStore } from "./modules/system/metrics-store";
-import { getGpuInfo } from "./modules/system/platform/gpu";
 import { ControllerRequestStore } from "./stores/controller-request-store";
 import { ControllerSettingsStore } from "./stores/controller-settings-store";
 import { InferenceRequestStore } from "./stores/inference-request-store";
@@ -33,9 +29,6 @@ export interface AppContext {
   launchFailureBudget: LaunchFailureBudget;
   downloadManager: DownloadManager;
   compute: Compute;
-  bridge: ComputeBridge;
-  gpuLeaseRegistry: GpuLeaseRegistry;
-  speechService: SpeechService;
   stores: {
     recipeStore: RecipeStore;
     downloadStore: DownloadStore;
@@ -132,7 +125,9 @@ export const makeAppContext = Effect.gen(function* () {
   }
 
   const recipeStore = yield* Effect.acquireRelease(
-    initialize("recipe-store.open", RecipeStore.open(dbPath)),
+    // Registry-backed: recipes live in data_dir/model-index.json; the sqlite
+    // path is only read once, to migrate legacy rows into the registry.
+    initialize("recipe-store.open", RecipeStore.open(config.data_dir, dbPath)),
     (resource) => releaseSafely("recipe-store.close", logger, resource.close()),
   );
   const downloadStore = yield* Effect.acquireRelease(
@@ -169,18 +164,9 @@ export const makeAppContext = Effect.gen(function* () {
   );
 
   const launchFailureBudget = createLaunchFailureBudget();
-  const compute = yield* initializeSync("compute.open", () => makeCompute(config, eventManager));
-  const bridge = createComputeBridge({
-    config,
-    compute: compute.service,
-    store: compute.store,
-    getRecipe: (recipeId) => recipeStore.get(recipeId),
-  });
-  const gpuLeaseRegistry = createGpuLeaseRegistry({
-    store: compute.store,
-    recordAlive: (record) =>
-      compute.service.stateOf(record).pipe(Effect.map((state) => state !== "exited")),
-  });
+  const compute = yield* initializeSync("compute.open", () =>
+    makeCompute(config, eventManager, (recipeId) => recipeStore.get(recipeId)),
+  );
   const downloadManager = yield* initialize(
     "download-manager.open",
     DownloadManager.make(config, downloadStore, eventManager, logger),
@@ -194,25 +180,6 @@ export const makeAppContext = Effect.gen(function* () {
   yield* Effect.acquireRelease(Effect.succeed(downloadManager), (resource) =>
     releaseSafely("download-manager.shutdown", logger, resource.shutdown()),
   );
-  const speechService = yield* Effect.acquireRelease(
-    initializeSync(
-      "speech-service.open",
-      () =>
-        new SpeechService({
-          dataDirectory: config.data_dir,
-          databasePath: dbPath,
-          engine: {
-            getCurrentProcess: (): ReturnType<ComputeBridge["findInferenceProcess"]> =>
-              bridge.findInferenceProcess(),
-            getCurrentRecipe: (): ReturnType<ComputeBridge["getCurrentRecipe"]> =>
-              bridge.getCurrentRecipe(),
-          },
-          gpuLeaseRegistry,
-          gpuInfo: getGpuInfo,
-        }),
-    ),
-    (resource) => releaseSafely("speech-service.shutdown", logger, resource.shutdown()),
-  );
 
   return {
     config,
@@ -221,9 +188,6 @@ export const makeAppContext = Effect.gen(function* () {
     launchFailureBudget,
     downloadManager,
     compute,
-    bridge,
-    gpuLeaseRegistry,
-    speechService,
     stores: {
       recipeStore,
       downloadStore,

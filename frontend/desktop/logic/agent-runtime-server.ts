@@ -1,12 +1,12 @@
 import { app } from "electron";
 import { existsSync } from "node:fs";
-import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fork, type ChildProcess } from "node:child_process";
 import { DESKTOP_CONFIG } from "../configs";
 import { log } from "../helpers/logger";
 import { resolveStablePort } from "../helpers/ports";
 import { resolveAugmentedPath } from "../helpers/resolve-path";
+import { registerOAuthVault } from "./oauth-vault";
 
 export type AgentRuntimeHandle = {
   frontendUrl: string;
@@ -30,17 +30,7 @@ process.once("exit", () => {
 function agentRuntimeEntry(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, "app", "agent-runtime", "standalone.mjs")
-    : path.resolve(
-        __dirname,
-        "..",
-        "..",
-        "..",
-        "..",
-        "services",
-        "agent-runtime",
-        "dist",
-        "standalone.mjs",
-      );
+    : path.resolve(app.getAppPath(), "..", "services", "agent-runtime", "dist", "standalone.mjs");
 }
 
 async function isAgentRuntimeHealthy(url: string): Promise<boolean> {
@@ -106,7 +96,6 @@ export async function startAgentRuntime(
 
   const port = await resolveStablePort(options.preferredPort);
   const url = `http://127.0.0.1:${port}`;
-  const litterBridgeSecret = randomBytes(32).toString("base64url");
   const child = fork(entry, {
     stdio: "pipe",
     detached: false,
@@ -120,9 +109,20 @@ export async function startAgentRuntime(
       LOCAL_STUDIO_RESOURCES_PATH: process.resourcesPath,
       LOCAL_STUDIO_AGENT_CWD: process.env.LOCAL_STUDIO_AGENT_CWD || app.getPath("home"),
       LOCAL_STUDIO_FRONTEND_BASE: options.frontendUrl,
-      LOCAL_STUDIO_LITTER_BRIDGE_SECRET: litterBridgeSecret,
+      // The desktop app is a single user browsing their own network: LAN and
+      // tailnet (CGNAT) URLs are the embedded browser's day job here, not an
+      // SSRF surface. Shared deployments leave this unset and stay strict.
+      LOCAL_STUDIO_BROWSER_ALLOW_PRIVATE:
+        process.env.LOCAL_STUDIO_BROWSER_ALLOW_PRIVATE || "1",
     },
   });
+
+  // The Google OAuth handlers moved into this child (#431) but secrets still
+  // live behind the Electron safeStorage vault, answered over process IPC.
+  // Without a listener here every vault call times out and Connect dies with
+  // "Secure OAuth storage is unavailable" — the Next child having its own
+  // listener does not help a request sent on this channel.
+  registerOAuthVault(child, DESKTOP_CONFIG.userDataDir);
 
   child.stdout?.on("data", (chunk: Buffer | string) => {
     log.info(`agent-runtime: ${String(chunk).trim()}`);

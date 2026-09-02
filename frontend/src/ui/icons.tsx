@@ -130,12 +130,13 @@ export function GitBranchIcon(props: IconProps) {
   );
 }
 
-export function SitegeistIcon(props: IconProps) {
-  // "site" + "zeitgeist" → an eye watching a page. The almond eye outline holds
-  // a solid iris, echoing the sitegeist orb mark. Single-color, no strokes.
+export function UserBrowserIcon(props: IconProps) {
+  // The user's own browser: a ring with a solid core, the concentric mark every
+  // Chromium-family browser wears. Deliberately unlike PanelIcon (the embedded
+  // panel) so the two composer buttons never read as the same thing.
   return (
     <Svg {...props}>
-      <path d="M8 2.5c3.4 0 6.2 2.2 7.5 5.5C14.2 11.3 11.4 13.5 8 13.5S1.8 11.3.5 8C1.8 4.7 4.6 2.5 8 2.5zm0 1.8a3.7 3.7 0 1 0 0 7.4 3.7 3.7 0 0 0 0-7.4zm0 1.8a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8z" />
+      <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.6a5.4 5.4 0 1 1 0 10.8A5.4 5.4 0 0 1 8 2.6zm0 2.2a3.2 3.2 0 1 0 0 6.4 3.2 3.2 0 0 0 0-6.4z" />
     </Svg>
   );
 }
@@ -179,6 +180,127 @@ export function PinOffIcon(props: IconProps) {
         clipRule="evenodd"
         d="M4 2h8v12l-4-3-4 3V2zM1.8 13.1 13.1 1.8l1.1 1.1L2.9 14.2z"
       />
+    </Svg>
+  );
+}
+
+/* -------------------------------------------------------------------------
+ * Navigation glyphs.
+ *
+ * The sidebar previously ran on lucide's stroked icons while everything inside
+ * the agent surface used this solid set, so the two halves of the window spoke
+ * different visual languages. These fill the gap: same 16px box, same solid
+ * fill, distinct silhouettes so a row is identifiable at 13px without reading
+ * its label.
+ * ---------------------------------------------------------------------- */
+
+/** Status — a beacon: ring plus centre dot, read as "system is reporting". */
+export function StatusIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        fillRule="evenodd"
+        d="M8 1.4a6.6 6.6 0 1 0 0 13.2A6.6 6.6 0 0 0 8 1.4Zm0 1.8a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm0 2.7a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2Z"
+      />
+    </Svg>
+  );
+}
+
+/** Models — stacked layers: many weights, one shelf. */
+export function ModelsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 1.2 14.8 5 8 8.8 1.2 5 8 1.2Z" />
+      <path d="M1.2 7.6 3.1 6.55 8 9.3l4.9-2.75L14.8 7.6 8 11.4 1.2 7.6Z" />
+      <path d="M1.2 10.6 3.1 9.55 8 12.3l4.9-2.75 1.9 1.05L8 14.4l-6.8-3.8Z" />
+    </Svg>
+  );
+}
+
+/** Automations — a bolt: something fires without you. */
+export function AutomationsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M9.8 1 3.4 9.2h3.4L6 15l6.6-8.6H9.2L9.8 1Z" />
+    </Svg>
+  );
+}
+
+/**
+ * Integrations — a plug: the row is about handing a session a capability it
+ * did not arrive with. Deliberately not lucide's stroked `Plug`, which is a
+ * hairline outline beside five solid silhouettes and reads as a hole in the
+ * rail at 13px.
+ */
+export function IntegrationsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4.7 1h1.9v3.4H4.7V1Zm4.7 0h1.9v3.4H9.4V1Z" />
+      <path d="M2.6 5.2h10.8v3.2l-2.8 2.8H9.1V15H6.9v-3.8H5.4L2.6 8.4V5.2Z" />
+    </Svg>
+  );
+}
+
+/** Configure — sliders, not a cog: these are settings you tune, not machinery. */
+export function ConfigureIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M1 4.2h14v1.6H1V4.2Zm3.6-1.6H7v4.8H4.6V2.6Z" />
+      <path d="M1 10.2h14v1.6H1v-1.6Zm8-1.6h2.4v4.8H9V8.6Z" />
+    </Svg>
+  );
+}
+
+/** Usage — a bar chart, the shape the page itself draws. */
+export function UsageIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M2 9h3v5H2V9Zm4.5-3.5h3V14h-3V5.5ZM11 2.5h3V14h-3V2.5Z" />
+    </Svg>
+  );
+}
+
+/** New task — a solid tile with the plus knocked out of it. */
+export function NewTaskIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        fillRule="evenodd"
+        d="M2 2.5h12v11H2v-11Zm5.25 2.75V7.5H5V9h2.25v2.25h1.5V9H11V7.5H8.75V5.25h-1.5Z"
+      />
+    </Svg>
+  );
+}
+
+/** Settings — a cog, the one place the machinery metaphor is still right. */
+export function SettingsIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        fillRule="evenodd"
+        d="m6.9 1 -.3 1.9-1.3.75L3.5 3l-1.6 2.8 1.5 1.2v1.5l-1.5 1.2L3.5 12.5l1.8-.65 1.3.75.3 1.9h3.2l.3-1.9 1.3-.75 1.8.65 1.6-2.8-1.5-1.2V7l1.5-1.2L13.5 3l-1.8.65-1.3-.75L10.1 1H6.9Zm1.1 4.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8Z"
+      />
+    </Svg>
+  );
+}
+
+/** Search — solid lens, matched to the nav's weight rather than lucide's hairline. */
+export function SearchIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path
+        fillRule="evenodd"
+        d="M7 1.4a5.6 5.6 0 1 0 3.35 10.09l3.08 3.08 1.13-1.13-3.08-3.08A5.6 5.6 0 0 0 7 1.4Zm0 1.8a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6Z"
+      />
+    </Svg>
+  );
+}
+
+/** Notifications — solid bell. */
+export function BellIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M8 1a1.1 1.1 0 0 1 1.1 1.1v.45A4.2 4.2 0 0 1 12.2 6.6v3l1.3 1.75v.9H2.5v-.9L3.8 9.6v-3a4.2 4.2 0 0 1 3.1-4.05V2.1A1.1 1.1 0 0 1 8 1Zm0 14a2 2 0 0 1-1.94-1.5h3.88A2 2 0 0 1 8 15Z" />
     </Svg>
   );
 }

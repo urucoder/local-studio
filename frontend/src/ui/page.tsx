@@ -57,13 +57,11 @@ export function PageContainer({
 }
 
 export function PageHeader({
-  eyebrow,
   title,
   description,
   status,
   actions,
 }: {
-  eyebrow?: string;
   title: ReactNode;
   description?: ReactNode;
   status?: ReactNode;
@@ -72,12 +70,10 @@ export function PageHeader({
   return (
     <div className="mb-4 flex min-h-8 items-center justify-between gap-3">
       <div className="min-w-0">
-        {eyebrow ? (
-          <div className="text-[length:var(--fs-xs)] uppercase tracking-[0.14em] text-(--ui-muted)">
-            {eyebrow}
-          </div>
-        ) : null}
-        <h2 className="mt-1 truncate text-[length:var(--fs-3xl)] font-medium tracking-[-0.02em] text-(--ui-fg)">
+        {/* The phone topbar already names this surface, so showing the title
+            again here is the second of two chromes. Keep it for screen readers
+            and for desktop, where there is no topbar. */}
+        <h2 className="sr-only truncate text-[length:var(--fs-3xl)] font-medium tracking-[-0.02em] text-(--ui-fg) md:not-sr-only">
           {title}
         </h2>
         {description ? (
@@ -141,7 +137,6 @@ export function SectionNav<Id extends string = string>({
 }
 
 export function TabbedPage<T extends string = string>({
-  eyebrow,
   title,
   description,
   actions,
@@ -152,7 +147,6 @@ export function TabbedPage<T extends string = string>({
   children,
   className,
 }: {
-  eyebrow?: string;
   title: ReactNode;
   description?: ReactNode;
   actions?: ReactNode;
@@ -166,7 +160,7 @@ export function TabbedPage<T extends string = string>({
   return (
     <AppPage>
       <PageContainer width={width} className={cx("pt-6 sm:pt-8", className)}>
-        <PageHeader eyebrow={eyebrow} title={title} description={description} actions={actions} />
+        <PageHeader title={title} description={description} actions={actions} />
         <div className="mt-7 border-b border-(--ui-separator)">
           <Tabs items={tabs} activeTab={activeTab} onSelectTab={onSelectTab} className="-mb-px" />
         </div>

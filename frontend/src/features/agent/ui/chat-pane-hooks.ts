@@ -1,13 +1,9 @@
 import { useCallback, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { Effect } from "effect";
 import type { ComposerMention } from "@/features/agent/composer-context";
-import {
-  newId,
-  visibleQueuedMessages,
-  type ChatPaneHandle,
-  type SessionTab,
-} from "@/features/agent/messages";
+import { newId, type ChatPaneHandle } from "@/features/agent/messages";
 import type { SessionEngine } from "@/features/agent/runtime/engine";
+import type { Session } from "@/features/agent/runtime/types";
 import type { ContextAttachRequest } from "@/features/agent/tools/types";
 import { attachmentDedupKey, type ChatAttachment } from "@/features/agent/ui/chat-attachments";
 import { useMountSubscription } from "@/hooks/use-mount-subscription";
@@ -19,7 +15,7 @@ export function useChatPaneDerivedState({
 }: {
   activeTabId: string;
   contextWindow: number;
-  tabs: SessionTab[];
+  tabs: Session[];
 }) {
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? null,
@@ -44,7 +40,12 @@ export function useChatPaneDerivedState({
     effectiveContextWindow,
     running,
     showEmptyPrompt,
-    visibleQueueItems: visibleQueuedMessages(queue),
+    // Every item still in the queue is pending delivery, so all of them show.
+    // This used to hide `sent` items, which meant EVERY follow-up — they are
+    // marked sent the moment pi accepts them — so the drawer stack was always
+    // empty and queueing looked broken. Items leave the queue when pi actually
+    // delivers them (the user echo) or contradicts us (`queue_update`).
+    visibleQueueItems: queue,
   };
 }
 
@@ -57,7 +58,7 @@ export function useChatPaneRuntimeHandle({
   onRegisterHandle,
   running,
 }: {
-  activeTab: SessionTab | null;
+  activeTab: Session | null;
   activeTabId: string;
   engine: SessionEngine;
   modelId: string;
@@ -69,8 +70,15 @@ export function useChatPaneRuntimeHandle({
   const replayedRef = useRef<Set<string>>(new Set());
   useMountSubscription(() => {
     if (!isFocused || !activeTab) return;
-    const { piSessionId, messages, status } = activeTab;
-    if (!piSessionId || messages.length > 0 || status !== "idle") return;
+    const { piSessionId, messages, status, hydratedFromCache } = activeTab;
+    // Messages restored from the localStorage snapshot do NOT count as having
+    // the transcript. Treating them as such is what made a reloaded session
+    // show a truncated history with no "Load earlier": the snapshot is capped
+    // at 200 messages / 512KB and carries no history cursor, so the replay
+    // that would fetch the real tail was skipped and there was no way back to
+    // the rest of the conversation short of reopening the session.
+    const hasRealTranscript = messages.length > 0 && !hydratedFromCache;
+    if (!piSessionId || hasRealTranscript || status !== "idle") return;
     if (replayedRef.current.has(activeTabId)) return;
     replayedRef.current.add(activeTabId);
     void engine.loadAndReplay(piSessionId, activeTabId);
@@ -124,50 +132,60 @@ export function useChatPaneMentionEffects({
     setMentionIndex(0);
   }, [mention?.kind, mention?.query, setMentionIndex]);
 
+  const mentionKind = mention?.kind ?? null;
+  const mentionQuery = mention?.query ?? "";
+  // Keyed on kind+query rather than the whole `mention` object: start/end move
+  // with the caret, so depending on the object refetched the whole listing on
+  // every keystroke even though the request never used those fields.
   useMountSubscription(() => {
-    if (!mention || mention.kind !== "file" || !cwd) {
+    if (mentionKind !== "file" || !cwd) {
       setFileMentionRows([]);
       return;
     }
     let cancelled = false;
-    void Effect.runPromise(
-      Effect.gen(function* () {
-        const response = yield* Effect.tryPromise({
-          try: () => fetch(`/api/agent/fs?cwd=${encodeURIComponent(cwd)}`, { cache: "no-store" }),
-          catch: (error) => error,
-        });
-        const payload = response.ok
-          ? yield* Effect.tryPromise({
-              try: () =>
-                response.json() as Promise<{
-                  entries?: Array<{ name: string; rel: string; path: string; kind: string }>;
-                }>,
-              catch: (error) => error,
-            })
-          : null;
-        if (cancelled) return;
-        const rows = (payload?.entries ?? [])
-          .filter((entry) => entry.kind === "file")
-          .map((entry) => ({
-            id: `file:${entry.rel}`,
-            name: entry.name,
-            rel: entry.rel,
-            path: entry.path,
-            source: "project",
-          }));
-        setFileMentionRows(rows);
-      }).pipe(
-        Effect.catch(() =>
-          Effect.sync(() => {
-            if (!cancelled) setFileMentionRows([]);
-          }),
+    const timer = setTimeout(() => {
+      void Effect.runPromise(
+        Effect.gen(function* () {
+          const url = `/api/agent/fs/search?cwd=${encodeURIComponent(cwd)}&q=${encodeURIComponent(mentionQuery)}`;
+          const response = yield* Effect.tryPromise({
+            try: () => fetch(url, { cache: "no-store" }),
+            catch: (error) => error,
+          });
+          const payload = response.ok
+            ? yield* Effect.tryPromise({
+                try: () =>
+                  response.json() as Promise<{
+                    entries?: Array<{ name: string; rel: string; path: string; kind: string }>;
+                  }>,
+                catch: (error) => error,
+              })
+            : null;
+          if (cancelled) return;
+          // Server-ranked (basename hits first); keep its order.
+          const rows = (payload?.entries ?? [])
+            .filter((entry) => entry.kind === "file")
+            .map((entry) => ({
+              id: `file:${entry.rel}`,
+              name: entry.name,
+              rel: entry.rel,
+              path: entry.path,
+              source: "project",
+            }));
+          setFileMentionRows(rows);
+        }).pipe(
+          Effect.catch(() =>
+            Effect.sync(() => {
+              if (!cancelled) setFileMentionRows([]);
+            }),
+          ),
         ),
-      ),
-    );
+      );
+    }, 120);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [cwd, mention, setFileMentionRows]);
+  }, [cwd, mentionKind, mentionQuery, setFileMentionRows]);
 }
 
 export function useChatPaneContextAttachEffect({

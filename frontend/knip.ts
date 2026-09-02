@@ -7,7 +7,7 @@ const config = {
     "desktop/resources/pi-extensions/*.ts",
   ],
   project: ["src/**/*.{ts,tsx}", "desktop/**/*.{ts,tsx}"],
-  ignore: [".next/**", "node_modules/**"],
+  ignore: [".next/**", ".next-dev/**", "node_modules/**"],
   ignoreIssues: {
     "desktop/interfaces.ts": ["types"],
   },
@@ -18,6 +18,7 @@ const config = {
     "@local-studio/agent-runtime",
     "@hono/node-server",
     "@modelcontextprotocol/sdk",
+    "@lydell/node-pty",
     "playwright-core",
     "chromium-bidi",
     "proper-lockfile",

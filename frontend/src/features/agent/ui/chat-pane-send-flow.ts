@@ -3,13 +3,9 @@ import { Effect } from "effect";
 import { type UpdateTab } from "@/features/agent/ui/chat-pane-composer";
 import { browserContextPrompt } from "@/features/agent/browser/context";
 import { selectedContextPrompt, type ComposerMention } from "@/features/agent/composer-context";
-import {
-  isPlaceholderSessionTitle,
-  newId,
-  nowLabel,
-  type SessionTab,
-} from "@/features/agent/messages";
+import { isPlaceholderSessionTitle, newId, nowLabel } from "@/features/agent/messages";
 import { type SessionEngine } from "@/features/agent/runtime/engine";
+import type { Session } from "@/features/agent/runtime/types";
 import {
   beginSessionSubmit,
   endSessionSubmit,
@@ -27,7 +23,7 @@ import {
 } from "@/features/agent/ui/chat-pane-send-flow-model";
 
 type UseChatPaneSendFlowOptions = {
-  activeTab: SessionTab | null;
+  activeTab: Session | null;
   attachments: ChatAttachment[];
   browserToolEnabled: boolean;
   clearAttachments: () => void;
@@ -156,7 +152,7 @@ export function useChatPaneSendFlow({
     (
       mode: "steer" | "follow_up",
       text: string,
-      tab: SessionTab,
+      tab: Session,
       runtime: string,
       cwdHint?: string,
     ) => {
@@ -395,6 +391,24 @@ export function useChatPaneSendFlow({
       const item = (activeTab.queue ?? []).find((entry) => entry.id === queueId);
       if (!item) return Promise.resolve();
       const runtime = activeTab.id;
+      // Promoting a queued follow-up to a steer delivers it into the running
+      // turn immediately, so it lands in the transcript optimistically the same
+      // way a composer steer does: dimmed until Pi echoes it back to the model.
+      const pendingSteerId = newId("user");
+      updateTab(activeTab.id, (t) => ({
+        ...t,
+        messages: [
+          ...t.messages,
+          {
+            id: pendingSteerId,
+            role: "user",
+            text: item.text,
+            pending: true,
+            awaitingEcho: true,
+            timestamp: nowLabel(),
+          },
+        ],
+      }));
       return Effect.runPromise(
         Effect.gen(function* () {
           const result = yield* Effect.tryPromise({
@@ -412,6 +426,7 @@ export function useChatPaneSendFlow({
           if (!result.ok) {
             updateTab(activeTab.id, (t) => ({
               ...t,
+              messages: t.messages.filter((message) => message.id !== pendingSteerId),
               error: result.error || "Steer failed",
             }));
           }
@@ -442,20 +457,5 @@ export function useChatPaneSendFlow({
     });
   }, [activeTab, cwd, engine, queueAndSendControl, runGuardedSubmit, submitPrompt, updateTab]);
 
-  // Re-run the last user turn after a failure (a 503, a network blip). On a
-  // *send* failure the text is restored to the composer, but a turn that errors
-  // mid-stream leaves the prompt only in the transcript with an empty composer —
-  // so retry resends the last user message directly.
-  const retryLast = useCallback(() => {
-    if (!activeTab || !modelId) return Promise.resolve();
-    const lastUserText = [...activeTab.messages].reverse().find((m) => m.role === "user")?.text;
-    const text = (lastUserText ?? activeTab.input).trim();
-    if (!text) return Promise.resolve();
-    return runGuardedSubmit(composerSubmitInFlightRef.current, activeTab.id, () => {
-      updateTab(activeTab.id, (t) => ({ ...t, error: "", input: "" }));
-      return submitPrompt(text, activeTab.id);
-    });
-  }, [activeTab, modelId, runGuardedSubmit, submitPrompt, updateTab]);
-
-  return { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn, retryLast };
+  return { sendMessage, queueMessage, removeQueued, editQueued, steerQueued, abortTurn };
 }
