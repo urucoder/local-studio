@@ -2,7 +2,7 @@ import { Schema } from "effect";
 
 export const AutonomousCoreVersionV1Schema = Schema.Literal(1);
 
-const IdSchema = Schema.String.check(Schema.isUUID());
+const IdSchema = Schema.String.check(Schema.isUUID(), Schema.isPattern(/^[0-9a-f-]+$/));
 const TextSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4096));
 const CounterSchema = Schema.Number.check(
   Schema.isInt(),
