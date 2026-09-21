@@ -34,12 +34,42 @@ const HttpEndpointSchema = Schema.String.check(
 
 export const CoreIdentityV1Schema = Schema.Struct({
   coreId: IdSchema,
-  hostId: IdSchema,
+  runtimeHostId: IdSchema,
   runtimeId: IdSchema,
+  controllerHostId: IdSchema,
   controllerId: IdSchema,
 });
 
 export type CoreIdentityV1 = typeof CoreIdentityV1Schema.Type;
+
+export const CoreLifecycleModeV1Schema = Schema.Literals(["client-owned", "autonomous"]);
+
+export type CoreLifecycleModeV1 = typeof CoreLifecycleModeV1Schema.Type;
+
+export const CoreLifecycleV1Schema = Schema.Struct({
+  mode: CoreLifecycleModeV1Schema,
+  runtimeOwner: Schema.NullOr(
+    Schema.Struct({
+      ownerClientId: IdSchema,
+      ownerHostId: IdSchema,
+    }),
+  ),
+  controllerPlacement: Schema.Literals(["runtime-host", "separate-host"]),
+  controllerOwnership: Schema.Literals([
+    "independent-supervisor",
+    "shared",
+    "client-managed-dedicated",
+  ]),
+  survivesFrontendExit: Schema.Boolean,
+}).check(
+  Schema.makeFilter(
+    (value) =>
+      (value.mode === "client-owned") === (value.runtimeOwner !== null) &&
+      value.survivesFrontendExit === (value.mode === "autonomous") &&
+      (value.controllerOwnership !== "client-managed-dedicated" ||
+        (value.mode === "client-owned" && value.controllerPlacement === "runtime-host")),
+  ),
+);
 
 const EnvelopeFields = {
   version: AutonomousCoreVersionV1Schema,
@@ -77,6 +107,7 @@ const ServiceReadinessSchema = Schema.Struct({
 export const CoreReadinessV1Schema = Schema.Struct({
   ...EnvelopeFields,
   observedAt: TimestampSchema,
+  lifecycleMode: CoreLifecycleModeV1Schema,
   runtime: ServiceReadinessSchema,
   controller: ServiceReadinessSchema,
   acceptsCommands: Schema.Boolean,
@@ -92,10 +123,17 @@ export const ControllerResolutionV1Schema = Schema.Struct({
   ...EnvelopeFields,
   configRevision: CounterSchema,
   source: Schema.Literal("service-settings"),
+  placement: Schema.Literals(["runtime-host", "separate-host"]),
   serverEndpoint: HttpEndpointSchema,
   credentialState: Schema.Literals(["available", "locked", "missing"]),
   state: Schema.Literals(["unresolved", "verified", "unreachable", "identity-mismatch"]),
-});
+}).check(
+  Schema.makeFilter(
+    (value) =>
+      (value.placement === "runtime-host") ===
+      (value.core.controllerHostId === value.core.runtimeHostId),
+  ),
+);
 
 const CapabilityNameSchema = Schema.Literals([
   "jobs.background",
@@ -136,6 +174,7 @@ export const CoreDiscoveryV1Schema = Schema.Struct({
   supportedVersions: SupportedVersionsSchema.check(
     Schema.makeFilter((versions) => versions.includes(1)),
   ),
+  lifecycle: CoreLifecycleV1Schema,
   capabilities: Schema.Array(CoreCapabilityV1Schema),
   retention: Schema.Struct({
     eventsSeconds: PositiveCounterSchema,
@@ -148,14 +187,22 @@ export const CoreDiscoveryV1Schema = Schema.Struct({
   Schema.makeFilter(
     (value) =>
       new Set(value.capabilities.map((capability) => capability.name)).size ===
-      value.capabilities.length,
+        value.capabilities.length &&
+      (value.lifecycle.controllerPlacement === "runtime-host") ===
+        (value.core.controllerHostId === value.core.runtimeHostId) &&
+      (value.lifecycle.runtimeOwner === null ||
+        value.lifecycle.runtimeOwner.ownerHostId === value.core.runtimeHostId),
   ),
 );
 
 export const CoreConnectionV1Schema = Schema.Struct({
   version: AutonomousCoreVersionV1Schema,
   profileId: IdSchema,
+  clientId: IdSchema,
+  clientHostId: IdSchema,
   expectedCore: CoreIdentityV1Schema,
+  expectedLifecycleMode: CoreLifecycleModeV1Schema,
+  role: Schema.Literals(["lifecycle-owner", "attached"]),
   runtimeEndpoint: HttpEndpointSchema,
   controllerEndpoint: HttpEndpointSchema,
   state: Schema.Literals([
@@ -174,6 +221,7 @@ export const CoreConnectionV1Schema = Schema.Struct({
       "forbidden",
       "identity-mismatch",
       "version-mismatch",
+      "lifecycle-mismatch",
       "not-ready",
     ]),
   ),
@@ -181,7 +229,10 @@ export const CoreConnectionV1Schema = Schema.Struct({
   Schema.makeFilter(
     (value) =>
       (value.state !== "attached" || value.reason === null) &&
-      (value.state !== "blocked" || value.reason !== null),
+      (value.state !== "blocked" || value.reason !== null) &&
+      (value.role !== "lifecycle-owner" ||
+        (value.expectedLifecycleMode === "client-owned" &&
+          value.clientHostId === value.expectedCore.runtimeHostId)),
   ),
 );
 
@@ -351,6 +402,7 @@ export const CoreErrorV1Schema = Schema.Struct({
     "invalid-payload",
     "identity-mismatch",
     "version-mismatch",
+    "lifecycle-mismatch",
     "unauthenticated",
     "forbidden",
     "not-found",
@@ -426,8 +478,9 @@ export function coreBoundaryV1(expected: CoreIdentityV1) {
   const matches = Schema.makeFilter(
     (value: { readonly core: CoreIdentityV1 }) =>
       value.core.coreId === expected.coreId &&
-      value.core.hostId === expected.hostId &&
+      value.core.runtimeHostId === expected.runtimeHostId &&
       value.core.runtimeId === expected.runtimeId &&
+      value.core.controllerHostId === expected.controllerHostId &&
       value.core.controllerId === expected.controllerId,
   );
   const options = { onExcessProperty: "error" } as const;
